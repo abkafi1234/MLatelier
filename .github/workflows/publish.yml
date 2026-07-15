@@ -1,0 +1,122 @@
+# Publishes mlatelier to PyPI.
+#
+# How to use
+# ----------
+# 1. Push a version tag:  git tag v1.0.0 && git push origin v1.0.0
+# 2. The "test" job runs the full suite on Python 3.9, 3.11, and 3.12.
+# 3. If all tests pass, "build" produces wheel + sdist artifacts.
+# 4. "publish" uploads them to PyPI using OIDC Trusted Publisher
+#    (no token needed — see setup instructions below).
+#
+# PyPI Trusted Publisher setup (one-time, ~2 min)
+# ------------------------------------------------
+# 1. Log in to https://pypi.org → Your projects → Add project
+#    (or go to the existing project → Settings → Publishing).
+# 2. Under "Add a new publisher" choose GitHub Actions and fill in:
+#      Owner:      <your-github-username>
+#      Repository: <your-repo-name>
+#      Workflow:   publish.yml
+#      Environment: pypi          ← must match the `environment:` below
+# 3. Save.  No secrets or tokens required after that.
+#
+# Alternatively, if you prefer a token:
+# 1. Create an API token on PyPI (Account settings → API tokens).
+# 2. In your repo: Settings → Secrets → Actions → New secret
+#    Name: PYPI_API_TOKEN, Value: the token (starts with pypi-).
+# 3. Replace the publish step with:
+#      uses: pypa/gh-action-pypi-publish@release/v1
+#      with:
+#        password: ${{ secrets.PYPI_API_TOKEN }}
+# -------------------------------------------------------------------------
+
+name: Test, Build & Publish
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - "v*.*.*"
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── 1. Run the full test suite on multiple Python versions ─────────────
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package and test runner
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "."
+          pip install pytest
+
+      - name: Run test suite
+        run: python -m pytest tests/ -q --tb=short
+
+  # ── 2. Build wheel + sdist ─────────────────────────────────────────────
+  build:
+    name: Build distribution
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install build frontend
+        run: pip install build
+
+      - name: Build wheel and sdist
+        run: python -m build
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  # ── 3. Publish to PyPI — only on version tags ─────────────────────────
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # Only fire on a pushed tag like v1.2.3
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    environment:
+      name: pypi
+      url: https://pypi.org/p/mlatelier
+
+    # Required for OIDC Trusted Publisher authentication
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
