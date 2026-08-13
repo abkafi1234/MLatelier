@@ -224,6 +224,7 @@ The assistant is automatically briefed on:
 - The active tab and task type
 
 Useful for: interpreting results, suggesting next steps, explaining model behaviour, and generating code snippets.
+The AI Assistant is optional. Without an API key, the core ML workflow remains fully functional.
 
 ---
 
