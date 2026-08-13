@@ -1,0 +1,33 @@
+cff-version: 1.2.0
+message: "If you use MLatelier in your research, please cite it as below."
+title: "MLatelier: A Zero-Code Multi-Modal Machine Learning Workshop with Integrated Explainability"
+abstract: >-
+  MLatelier is a browser-based Streamlit application that lets users without
+  programming experience run complete machine learning experiments across
+  tabular, vision, and text data. It combines Bayesian hyperparameter
+  optimisation over 20+ scikit-learn-compatible estimators and twelve
+  pre-trained vision architectures with built-in explainability (SHAP, LIME, partial
+  dependence plots, Grad-CAM), a configurable ablation module, and multi-label
+  classification support.
+type: software
+authors:
+  - family-names: "Al Kafi"
+    given-names: "Md Abdullah"
+    email: kafi.cse@diu.edu.bd
+    affiliation: "Multidisciplinary Action Research (MARS) Lab, Daffodil International University"
+  - family-names: "Sunny"
+    given-names: "Habib Mohammed"
+    email: sunny2305101660@diu.edu.bd
+    affiliation: "Multidisciplinary Action Research (MARS) Lab, Daffodil International University"
+version: 1.1.0
+license: MIT
+repository-code: "https://github.com/abkafi1234/MLatelier"
+url: "https://github.com/abkafi1234/MLatelier"
+keywords:
+  - machine learning
+  - automated machine learning
+  - explainable AI
+  - no-code
+  - Bayesian optimisation
+  - multi-label classification
+  - Streamlit

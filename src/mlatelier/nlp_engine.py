@@ -29,6 +29,11 @@ from sklearn.metrics import (
 from sklearn.calibration import CalibratedClassifierCV
 from scipy.stats import ttest_rel
 
+try:                       # package import
+    from . import checkpoint as _ckpt
+except ImportError:        # flat import (tests insert src/mlatelier on sys.path)
+    import checkpoint as _ckpt
+
 # ── Optional heavy dependencies ───────────────────────────────────────────────
 
 try:
@@ -778,12 +783,19 @@ def run_transformer_finetune(
     export_dir: Optional[str] = None,
     progress_bar=None,
     status_text=None,
+    checkpoint_dir: Optional[str] = None,
+    resume: bool = True,
 ) -> tuple:
     """Fine-tune any HuggingFace sequence-classification model end-to-end.
 
     Returns the same 9-tuple as run_nlp_optimization() for drop-in compatibility:
         (results_list, best_acc, avg_acc, improvement_pct, p_val_str,
          winner_params, class_report, class_names, winner_curves)
+
+    When `checkpoint_dir` is set, model/optimiser/scheduler state is written
+    after every epoch and resumed from on entry, so an interrupted fine-tune
+    continues from the last completed epoch. Fine-tuning is the longest
+    operation in the framework, so this is where an interruption costs most.
     """
     if not _HAS_TRANSFORMERS:
         raise ImportError(
@@ -876,8 +888,41 @@ def run_transformer_finetune(
     )
 
     train_losses: list[float] = []
+    start_ep = 0
 
-    for ep in range(epochs):
+    # ── Checkpoint setup ──────────────────────────────────────────────────
+    ckpt_path = None
+    ckpt_cfg = None
+    if checkpoint_dir:
+        ckpt_cfg = {
+            "kind": "hf_finetune", "model_id": model_id, "epochs": int(epochs),
+            "batch_size": int(batch_size), "learning_rate": float(learning_rate),
+            "max_seq_len": int(max_seq_len), "warmup_ratio": float(warmup_ratio),
+            "freeze_backbone": bool(freeze_backbone),
+            "random_state": int(random_state), "n_samples": len(texts),
+            "n_classes": len(class_names),
+        }
+        ckpt_path = _ckpt.checkpoint_path(
+            f"hf_{model_id}", ckpt_cfg, root=checkpoint_dir)
+        if resume:
+            saved = _ckpt.load_checkpoint(ckpt_path, ckpt_cfg)
+            if saved is not None:
+                try:
+                    model.load_state_dict(saved["model_state"])
+                    optimizer.load_state_dict(saved["optimizer_state"])
+                    scheduler.load_state_dict(saved["scheduler_state"])
+                    start_ep     = int(saved.get("epoch", 0))
+                    train_losses = list(saved.get("train_losses", []))
+                    if status_text:
+                        status_text.info(
+                            f"Resuming fine-tune from epoch {start_ep + 1}/{epochs}")
+                except Exception as e:
+                    warnings.warn(
+                        f"Fine-tune checkpoint could not be applied ({e}); "
+                        "starting from epoch 0.", UserWarning)
+                    start_ep = 0
+
+    for ep in range(start_ep, epochs):
         if status_text:
             status_text.info(f"Fine-tuning epoch {ep + 1}/{epochs} …")
         model.train()
@@ -905,6 +950,19 @@ def run_transformer_finetune(
                 progress_bar.progress(min(frac * 0.9, 0.9))
 
         train_losses.append(ep_loss / max(len(train_loader), 1))
+
+        if ckpt_path:
+            _ckpt.save_checkpoint(ckpt_path, {
+                "epoch":            ep + 1,
+                "model_state":      model.state_dict(),
+                "optimizer_state":  optimizer.state_dict(),
+                "scheduler_state":  scheduler.state_dict(),
+                "train_losses":     train_losses,
+            }, config=ckpt_cfg)
+
+    # Fine-tuning finished normally — drop the checkpoint.
+    if ckpt_path:
+        _ckpt.clear_checkpoint(ckpt_path)
 
     # ── Evaluation ────────────────────────────────────────────────────────────
     if status_text:

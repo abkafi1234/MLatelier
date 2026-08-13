@@ -23,6 +23,11 @@ from skopt.space import Real
 from torch.utils.data import DataLoader, Dataset, Subset, WeightedRandomSampler
 from torchvision import datasets, models, transforms
 
+try:                       # package import
+    from . import checkpoint as _ckpt
+except ImportError:        # flat import (tests insert src/mlatelier on sys.path)
+    import checkpoint as _ckpt
+
 warnings.filterwarnings("ignore")
 
 
@@ -329,11 +334,19 @@ def _train_and_evaluate(
     return_model: bool = False,
     seed: int = 42,
     epoch_callback=None,
+    checkpoint_dir: Optional[str] = None,
+    checkpoint_tag: str = "",
+    resume: bool = True,
 ) -> tuple:
     """
     Returns:
         (best_val_f1, all_labels, best_preds, epoch_train_losses,
          epoch_val_f1s, fitted_model_or_None)
+
+    When `checkpoint_dir` is set, a checkpoint is written after every epoch and
+    a matching one is resumed from on entry, so an interrupted run continues
+    from the last completed epoch rather than restarting. The checkpoint is
+    deleted once training finishes normally.
     """
     set_master_seed(seed)
 
@@ -361,8 +374,57 @@ def _train_and_evaluate(
     best_labels:        list = []
     best_weights             = None
     patience_counter         = 0
+    start_epoch              = 0
 
-    for epoch in range(run_epochs):
+    # ── Checkpoint setup ──────────────────────────────────────────────────
+    ckpt_path = None
+    if checkpoint_dir:
+        # `phase` keeps the three long training calls (per-model, final-test,
+        # winner) from colliding: they can share model/lr/wd and differ only in
+        # which loader they evaluate against.
+        ckpt_cfg = {
+            "kind": "vision", "phase": checkpoint_tag or "train",
+            "model_name": model_name, "lr": float(lr),
+            "wd": float(wd), "run_epochs": int(run_epochs),
+            "freeze_strategy": freeze_strategy, "num_classes": int(num_classes),
+            "lr_scheduler": lr_scheduler, "seed": int(seed),
+        }
+        ckpt_path = _ckpt.checkpoint_path(
+            f"vision_{model_name}_{checkpoint_tag or 'train'}",
+            ckpt_cfg, root=checkpoint_dir)
+        if resume:
+            saved = _ckpt.load_checkpoint(ckpt_path, ckpt_cfg)
+            if saved is not None:
+                try:
+                    model.load_state_dict(saved["model_state"])
+                    optimizer.load_state_dict(saved["optimizer_state"])
+                    if scheduler is not None and saved.get("scheduler_state"):
+                        scheduler.load_state_dict(saved["scheduler_state"])
+                    start_epoch        = int(saved.get("epoch", 0))
+                    best_val_f1        = float(saved.get("best_val_f1", -1.0))
+                    best_preds         = list(saved.get("best_preds", []))
+                    best_labels        = list(saved.get("best_labels", []))
+                    best_weights       = saved.get("best_weights")
+                    epoch_train_losses = list(saved.get("epoch_train_losses", []))
+                    epoch_val_f1s      = list(saved.get("epoch_val_f1s", []))
+                    patience_counter   = int(saved.get("patience_counter", 0))
+                except Exception as e:
+                    warnings.warn(
+                        f"Checkpoint for '{model_name}' could not be applied "
+                        f"({e}); starting from epoch 0.", UserWarning)
+                    start_epoch = 0
+
+    if start_epoch >= run_epochs:
+        # Already finished in a previous session; rebuild and return.
+        fitted = None
+        if return_model and best_weights is not None:
+            model.load_state_dict(best_weights)
+            fitted = model
+        _ckpt.clear_checkpoint(ckpt_path)
+        return (best_val_f1, best_labels, best_preds,
+                epoch_train_losses, epoch_val_f1s, fitted)
+
+    for epoch in range(start_epoch, run_epochs):
         model.train()
         running_loss = 0.0
         for inputs, labels in train_loader:
@@ -406,12 +468,30 @@ def _train_and_evaluate(
 
             if scheduler is not None and lr_scheduler == "reduce":
                 scheduler.step(val_f1)
-        else:
-            if scheduler is not None and lr_scheduler != "reduce":
-                scheduler.step()
 
+        # Step the epoch-based schedulers exactly once per epoch. This must sit
+        # outside the evaluate/skip branch above: stepping inside it as well
+        # advanced cosine annealing twice per epoch whenever evaluation was
+        # skipped, so BO trials ran a compressed LR schedule that the final
+        # full-training run did not reproduce.
         if scheduler is not None and lr_scheduler != "reduce":
             scheduler.step()
+
+        # Persist progress after each completed epoch.
+        if ckpt_path:
+            _ckpt.save_checkpoint(ckpt_path, {
+                "epoch":              epoch + 1,
+                "model_state":        model.state_dict(),
+                "optimizer_state":    optimizer.state_dict(),
+                "scheduler_state":    scheduler.state_dict() if scheduler is not None else None,
+                "best_val_f1":        best_val_f1,
+                "best_preds":         [int(p) for p in best_preds],
+                "best_labels":        [int(l) for l in best_labels],
+                "best_weights":       best_weights,
+                "epoch_train_losses": epoch_train_losses,
+                "epoch_val_f1s":      epoch_val_f1s,
+                "patience_counter":   patience_counter,
+            }, config=ckpt_cfg)
 
         if early_stopping_patience > 0 and patience_counter >= early_stopping_patience:
             break
@@ -420,6 +500,10 @@ def _train_and_evaluate(
     if return_model and best_weights is not None:
         model.load_state_dict(best_weights)
         fitted = model
+
+    # Training completed normally — the checkpoint has served its purpose.
+    if ckpt_path:
+        _ckpt.clear_checkpoint(ckpt_path)
 
     if not return_model:
         del model
@@ -615,6 +699,7 @@ def run_vision_optimization(
     random_seed: int = 42,
     epoch_callback=None,
     model_callback=None,
+    checkpoint_dir: Optional[str] = None,
 ) -> tuple:
     """
     Bayesian Optimisation over lr / weight_decay for each model, then full
@@ -699,6 +784,7 @@ def run_vision_optimization(
             early_stopping_patience=early_stopping_patience,
             lr_scheduler=lr_scheduler, seed=random_seed,
             epoch_callback=epoch_callback,
+            checkpoint_dir=checkpoint_dir, checkpoint_tag="opt",
         )
         completed += 1
         _update_progress(progress_bar, completed / total_steps)
@@ -755,6 +841,7 @@ def run_vision_optimization(
             early_stopping_patience=early_stopping_patience,
             lr_scheduler=lr_scheduler, seed=random_seed,
             evaluate_each_epoch=False,
+            checkpoint_dir=checkpoint_dir, checkpoint_tag="final_test",
         )
         item["Final Test F1"] = round(test_f1, 4)
         model_records[mn]["test_f1"] = test_f1
@@ -786,6 +873,7 @@ def run_vision_optimization(
         early_stopping_patience=early_stopping_patience,
         lr_scheduler=lr_scheduler, seed=random_seed,
         evaluate_each_epoch=False, return_model=True,
+        checkpoint_dir=checkpoint_dir, checkpoint_tag="winner",
     )
     del base_clean
     torch.cuda.empty_cache()

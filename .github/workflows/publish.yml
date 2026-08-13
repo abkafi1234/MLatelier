@@ -3,7 +3,8 @@
 # How to use
 # ----------
 # 1. Push a version tag:  git tag v1.0.0 && git push origin v1.0.0
-# 2. The "test" job runs the full suite on Python 3.9, 3.11, and 3.12.
+# 2. The "test" job runs the full suite (333 tests) on Python 3.9 through 3.14,
+#    reporting code coverage into the workflow summary.
 # 3. If all tests pass, "build" produces wheel + sdist artifacts.
 # 4. "publish" uploads them to PyPI using OIDC Trusted Publisher
 #    (no token needed — see setup instructions below).
@@ -13,8 +14,8 @@
 # 1. Log in to https://pypi.org → Your projects → Add project
 #    (or go to the existing project → Settings → Publishing).
 # 2. Under "Add a new publisher" choose GitHub Actions and fill in:
-#      Owner:      <your-github-username>
-#      Repository: <your-repo-name>
+#      Owner:      abkafi1234
+#      Repository: MLatelier
 #      Workflow:   publish.yml
 #      Environment: pypi          ← must match the `environment:` below
 # 3. Save.  No secrets or tokens required after that.
@@ -47,7 +48,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.11", "3.12"]
+        python-version: ["3.9", "3.11", "3.12", "3.13", "3.14"]
 
     steps:
       - uses: actions/checkout@v4
@@ -61,11 +62,44 @@ jobs:
       - name: Install package and test runner
         run: |
           python -m pip install --upgrade pip
-          pip install -e "."
-          pip install pytest
+          pip install -e ".[dev]"
 
-      - name: Run test suite
-        run: python -m pytest tests/ -q --tb=short
+      # Coverage is keyed to the source PATH, not the package name: the tests
+      # sys.path-insert src/mlatelier and import the modules flat (`import
+      # nlp_engine`), so `--cov=mlatelier` attributes almost nothing.
+      - name: Run test suite with coverage
+        run: |
+          python -m pytest tests/ -q --tb=short \
+            --cov=src/mlatelier \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --cov-report=json
+
+      - name: Coverage summary
+        if: always()
+        env:
+          PY_VER: ${{ matrix.python-version }}
+        run: |
+          python -c "
+          import json, os
+          data = json.load(open('coverage.json'))
+          pct = data['totals']['percent_covered']
+          line = '### Coverage (Python %s): **%.1f%%**' % (os.environ['PY_VER'], pct)
+          print(line)
+          path = os.environ.get('GITHUB_STEP_SUMMARY')
+          if path:
+              open(path, 'a').write(line + '\n')
+          "
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-py${{ matrix.python-version }}
+          path: |
+            coverage.xml
+            coverage.json
+          if-no-files-found: warn
 
   # ── 2. Build wheel + sdist ─────────────────────────────────────────────
   build:

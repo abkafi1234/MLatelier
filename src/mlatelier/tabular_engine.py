@@ -691,29 +691,136 @@ def export_tabular_model(pipeline: ImbPipeline, export_dir: str,
     return path
 
 
+_ONNX_CONVERTERS_REGISTERED = False
+
+
+def _register_onnx_converters() -> None:
+    """Teach skl2onnx how to convert the gradient-boosting backends.
+
+    skl2onnx ships converters for scikit-learn estimators only. XGBoost and
+    LightGBM need converters supplied by onnxmltools; without this registration
+    any pipeline ending in one of them fails to convert. Registration is global
+    and idempotent, so this runs at most once per process.
+
+    CatBoost is deliberately not registered: it has no skl2onnx converter, and
+    its native exporter cannot serialise the surrounding preprocessing pipeline.
+    CatBoost models are exported as .joblib only.
+    """
+    global _ONNX_CONVERTERS_REGISTERED
+    if _ONNX_CONVERTERS_REGISTERED:
+        return
+
+    try:
+        from skl2onnx import update_registered_converter
+        from skl2onnx.common.shape_calculator import (
+            calculate_linear_classifier_output_shapes,
+            calculate_linear_regressor_output_shapes,
+        )
+    except ImportError:
+        return
+
+    _clf_opts = {"nocl": [True, False], "zipmap": [True, False, "columns"]}
+
+    try:
+        from onnxmltools.convert.xgboost.operator_converters.XGBoost import (
+            convert_xgboost,
+        )
+        update_registered_converter(
+            xgb.XGBClassifier, "XGBoostXGBClassifier",
+            calculate_linear_classifier_output_shapes, convert_xgboost,
+            options=_clf_opts,
+        )
+        update_registered_converter(
+            xgb.XGBRegressor, "XGBoostXGBRegressor",
+            calculate_linear_regressor_output_shapes, convert_xgboost,
+        )
+    except Exception as e:
+        warnings.warn(
+            f"XGBoost ONNX converter unavailable ({e}); XGBoost models will be "
+            "exported as .joblib only. Install with: pip install onnxmltools",
+            UserWarning)
+
+    if _HAS_LIGHTGBM:
+        try:
+            from onnxmltools.convert.lightgbm.operator_converters.LightGbm import (
+                convert_lightgbm,
+            )
+            update_registered_converter(
+                lgb.LGBMClassifier, "LightGbmLGBMClassifier",
+                calculate_linear_classifier_output_shapes, convert_lightgbm,
+                options=_clf_opts,
+            )
+            update_registered_converter(
+                lgb.LGBMRegressor, "LightGbmLGBMRegressor",
+                calculate_linear_regressor_output_shapes, convert_lightgbm,
+            )
+        except Exception as e:
+            warnings.warn(
+                f"LightGBM ONNX converter unavailable ({e}); LightGBM models "
+                "will be exported as .joblib only.", UserWarning)
+
+    _ONNX_CONVERTERS_REGISTERED = True
+
+
+def _onnx_initial_types(X_sample: Optional[pd.DataFrame], n_features: int):
+    """Describe the ONNX graph inputs.
+
+    The preprocessing step is a ColumnTransformer that selects columns *by
+    name*, so the graph needs one named input per feature — a single anonymous
+    tensor cannot be matched back to column names and conversion fails with
+    "Unable to find column name ...". When no sample frame is available we fall
+    back to a single float tensor, which only works for pipelines without a
+    name-based ColumnTransformer.
+    """
+    from skl2onnx.common.data_types import FloatTensorType, StringTensorType
+
+    if X_sample is None:
+        return [("float_input", FloatTensorType([None, n_features]))]
+
+    types = []
+    for col in X_sample.columns:
+        if pd.api.types.is_numeric_dtype(X_sample[col].dtype):
+            types.append((str(col), FloatTensorType([None, 1])))
+        else:
+            types.append((str(col), StringTensorType([None, 1])))
+    return types
+
+
 def export_tabular_model_onnx(
     pipeline: ImbPipeline,
     export_dir: str,
     model_name: str,
     n_features: int,
+    X_sample: Optional[pd.DataFrame] = None,
 ) -> Optional[str]:
     """Export the inference-only portion of the pipeline to ONNX (requires skl2onnx).
 
-    Returns the .onnx file path on success, or None if skl2onnx is not installed
-    or the model family is not supported by the converter.
+    Returns the .onnx file path on success, or None if the model family has no
+    converter (CatBoost).
+
+    Pass `X_sample` (typically the training frame) so the graph inputs can be
+    named after the feature columns; without it, conversion of any pipeline
+    containing a name-based ColumnTransformer will fail.
 
     The SMOTE/oversampler step is intentionally excluded — it is a training-only
     component and has no role in inference.
+
+    Classifier outputs are emitted as a plain probability tensor rather than the
+    default ZipMap (a sequence of dicts), because most ONNX runtimes outside
+    Python handle tensors and not maps.
     """
     try:
-        from skl2onnx import convert_sklearn, update_registered_converter
-        from skl2onnx.common.data_types import FloatTensorType
+        from skl2onnx import convert_sklearn
         from sklearn.pipeline import Pipeline as _SkPipeline
     except ImportError:
+        # skl2onnx is a required dependency, so this only fires in a broken or
+        # partially-installed environment.
         warnings.warn(
-            "skl2onnx is not installed; ONNX export skipped. "
-            "Install with: pip install skl2onnx onnxmltools", UserWarning)
+            "skl2onnx is unavailable; ONNX export skipped. Reinstall with: "
+            "pip install --force-reinstall mlatelier", UserWarning)
         return None
+
+    _register_onnx_converters()
 
     try:
         # Build an inference-only sklearn Pipeline (drop the SMOTE sampler step).
@@ -723,9 +830,27 @@ def export_tabular_model_onnx(
         ]
         inference_pipe = _SkPipeline(inference_steps)
 
-        initial_type = [("float_input", FloatTensorType([None, n_features]))]
-        onnx_model   = convert_sklearn(inference_pipe, initial_types=initial_type,
-                                       target_opset=17)
+        initial_type = _onnx_initial_types(X_sample, n_features)
+
+        # The onnxmltools converters for XGBoost/LightGBM do not support
+        # ai.onnx.ml opset 5 (the current default); pin that domain to 3.
+        target_opset = {"": 17, "ai.onnx.ml": 3}
+
+        # Prefer tensor output for classifiers; fall back if the converter for
+        # this estimator does not accept the zipmap option.
+        final_est = inference_steps[-1][1] if inference_steps else None
+        options = None
+        if final_est is not None and hasattr(final_est, "predict_proba"):
+            options = {id(final_est): {"zipmap": False}}
+
+        try:
+            onnx_model = convert_sklearn(
+                inference_pipe, initial_types=initial_type,
+                target_opset=target_opset, options=options)
+        except Exception:
+            onnx_model = convert_sklearn(
+                inference_pipe, initial_types=initial_type,
+                target_opset=target_opset)
 
         safe = "".join(c if c.isalnum() or c == "_" else "_" for c in model_name)
         onnx_path = os.path.join(export_dir, f"MLatelier_{safe}.onnx")
@@ -978,7 +1103,8 @@ def run_tabular_optimization(
     winning_params       = winning_pipeline = None
     winning_bo_scores: list = []
     winning_bo_history: list = []
-    all_exported_paths: dict = {}          # name → path for every fitted model
+    all_exported_paths: dict = {}          # name → .joblib path for every fitted model
+    all_onnx_paths: dict = {}              # name → .onnx path, where conversion succeeded
 
     runnable = [m for m in selected_models if m in registry]
     total    = max(len(runnable), 1)
@@ -1112,10 +1238,14 @@ def run_tabular_optimization(
                 }
                 _epath = export_tabular_model(current_pipe, export_dir, name, _emeta)
                 all_exported_paths[name] = _epath
-                # Best-effort ONNX export alongside the .joblib file.
-                export_tabular_model_onnx(
+                # Best-effort ONNX export alongside the .joblib file. Returns
+                # None for model families with no converter; that is not an error.
+                _opath = export_tabular_model_onnx(
                     current_pipe, export_dir, name,
-                    n_features=len(data.feature_names))
+                    n_features=len(data.feature_names),
+                    X_sample=data.X_train)
+                if _opath:
+                    all_onnx_paths[name] = _opath
             except Exception as _ee:
                 warnings.warn(f"Export failed for '{name}': {_ee}", UserWarning)
 
@@ -1234,6 +1364,7 @@ def run_tabular_optimization(
         "confusion_matrix":    cm_data,
         "exported_model_path": exported_path,
         "all_exported_paths":  all_exported_paths,
+        "all_onnx_paths":      all_onnx_paths,
         "reproducibility_metadata": {
             **data.metadata,
             "evaluation": {

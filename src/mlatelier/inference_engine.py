@@ -41,7 +41,8 @@ def predict_tabular(
     Run pipeline.predict (and predict_proba if available) on df.
     Returns a DataFrame with all original columns + Prediction [+ Confidence
     + per-class probability columns].
-    Missing expected feature columns are filled with NaN.
+    Missing expected feature columns are added and filled with 0, and a
+    UserWarning naming them is emitted.
     """
     missing = [f for f in feature_names if f not in df.columns]
     if missing:

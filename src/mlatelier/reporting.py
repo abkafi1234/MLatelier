@@ -520,37 +520,65 @@ def render_export_buttons(results_df: Optional[pd.DataFrame],
         )
 
 
-def render_all_models_download(all_exported_paths: dict):
-    """Show a download button for every trained model, 3 per row."""
+def _download_grid(paths: dict, key_prefix: str, n_cols: int = 3):
+    """Lay out one download button per model, n_cols per row."""
+    names = list(paths.keys())
+    for i in range(0, len(names), n_cols):
+        row_names = names[i : i + n_cols]
+        row_cols  = st.columns(n_cols)
+        for col, name in zip(row_cols, row_names):
+            path = paths[name]
+            if path and os.path.exists(path):
+                with open(path, "rb") as fh:
+                    data = fh.read()
+                col.download_button(
+                    label=f"{name}",
+                    data=data,
+                    file_name=os.path.basename(path),
+                    mime="application/octet-stream",
+                    use_container_width=True,
+                    key=f"{key_prefix}_{name}",
+                )
+            else:
+                col.button(name, disabled=True, use_container_width=True,
+                           key=f"{key_prefix}_{name}_na")
+
+
+def render_all_models_download(all_exported_paths: dict,
+                               all_onnx_paths: Optional[dict] = None):
+    """Show a download button for every trained model, 3 per row.
+
+    When ONNX conversion succeeded for any model, a second grid offers the
+    .onnx files for cross-platform inference.
+    """
     if not all_exported_paths:
         return
+
     st.markdown("#### Download Individual Models")
     st.caption(
         "Every model trained during this run is available for download "
         "with its hyperparameter metadata (.json sidecar)."
     )
-    names  = list(all_exported_paths.keys())
-    n_cols = 3
-    for i in range(0, len(names), n_cols):
-        row_names = names[i : i + n_cols]
-        row_cols  = st.columns(n_cols)
-        for col, name in zip(row_cols, row_names):
-            path = all_exported_paths[name]
-            if path and os.path.exists(path):
-                with open(path, "rb") as fh:
-                    data = fh.read()
-                fname = os.path.basename(path)
-                col.download_button(
-                    label=f"{name}",
-                    data=data,
-                    file_name=fname,
-                    mime="application/octet-stream",
-                    use_container_width=True,
-                    key=f"dl_model_{name}",
-                )
-            else:
-                col.button(name, disabled=True, use_container_width=True,
-                           key=f"dl_model_{name}_na")
+    _download_grid(all_exported_paths, "dl_model")
+
+    if not all_onnx_paths:
+        return
+
+    st.markdown("#### Download as ONNX")
+    missing = [n for n in all_exported_paths if n not in all_onnx_paths]
+    caption = (
+        "Open Neural Network Exchange format — run these models outside Python "
+        "(C++, C#, Java, JavaScript, or mobile) with any ONNX runtime. "
+        "Preprocessing is baked into the graph; the training-only oversampling "
+        "step is excluded."
+    )
+    if missing:
+        caption += (
+            "  \nNo converter is available for: " + ", ".join(missing) +
+            " — download the .joblib above for those."
+        )
+    st.caption(caption)
+    _download_grid(all_onnx_paths, "dl_onnx")
 
 
 # ── AI assistant ──────────────────────────────────────────────────────────────
@@ -723,6 +751,321 @@ in the Tabular ML tab and tick XGBoost, then click Run Tabular Pipeline."
 """
 
 
+_MLATELIER_TEACHER_PROMPT = """\
+You are the ML tutor embedded in MLatelier, a no-code machine learning platform.
+
+WHO YOU ARE TALKING TO
+Domain experts and students — biologists, clinicians, economists, coursework
+students — who understand their own data deeply but have little or no ML
+training. They can read a number. What they cannot yet do is judge whether a
+number means anything. That judgement is what you are here to build.
+
+YOUR PURPOSE IS TEACHING, NOT OPTIMISING
+A tool that hands out fixes produces users who stay dependent on it. Your job is
+that after a few sessions the user can read their own leaderboard and spot the
+problem before you do. So every time you flag something, the user must come away
+understanding the underlying idea — not just which toggle to flip.
+
+Never answer with a bare instruction. "Enable SMOTE" teaches nothing. "Your
+smaller class has 14 samples against 300, so a model that never predicts it
+still scores 95% accuracy — that is why accuracy is the wrong lens here, and why
+macro F1 dropped to 0.61" teaches the concept of imbalance, why the metric
+misled, and what to watch next time.
+
+HOW TO STRUCTURE AN OBSERVATION
+For each substantive point, cover these four in prose (do NOT print them as
+labelled headings — weave them into readable paragraphs):
+  1. WHAT the numbers show. Quote the actual figures from the context.
+  2. WHY it happens — the mechanism, in plain language.
+  3. WHY IT MATTERS — the consequence for a decision the user might make. This
+     is the part most assistants skip and the part that makes it stick.
+  4. WHAT TO DO in MLatelier — the exact tab, expander, toggle, or slider — and
+     what number should change if the fix worked.
+
+Point 4 is not optional: an explanation the user cannot act on is a lecture.
+Point 3 is not optional either: an action without a reason is a ritual.
+
+USE THE DIAGNOSTIC SIGNALS
+The context ends with precomputed "Diagnostic Signals". These are the highest
+value teaching material available — comparisons already worked out from this
+specific run. Build your answer around them and quote their numbers. Do not
+repeat a signal verbatim; explain what it means.
+
+CALIBRATE YOUR DEPTH
+- Narrow question ("what is macro F1?") → answer it directly and briefly. Do not
+  dump a full diagnosis on someone who asked one thing.
+- Open question ("how do I improve this?") → teach the two or three things that
+  actually matter, most important first. Three well-explained points beat ten
+  bullets.
+- Never pad. If the experiment looks sound, say so plainly and explain what
+  makes it sound — that is a lesson too.
+
+INTELLECTUAL HONESTY — THIS OVERRIDES BEING ENCOURAGING
+- If a result is too good, say so and name the likely cause: leakage, a target
+  proxy among the features, a test set too small to trust.
+- If a difference is inside the noise, say it is not a real difference. Users
+  routinely over-read a 0.004 gap on a 40-row test set; correcting that instinct
+  is one of the most valuable things you can do.
+- If the dataset is the limiting factor, say that rather than suggesting more
+  tuning. No hyperparameter search fixes 300 rows or a mislabelled target.
+- Distinguish what the numbers show from what you are inferring. "This suggests"
+  and "this shows" are different claims.
+- Never invent a number that is not in the context.
+
+TONE
+A good supervisor at a whiteboard: direct, warm, unpatronising. Assume
+intelligence, not knowledge. Define a term the first time you use it, in a
+clause, then use it normally. No flattery, no hedging into vagueness. Markdown:
+**bold** for key numbers, `code` for model and column names, short paragraphs.
+"""
+
+
+def _pipeline_config_lines(eng_state: dict) -> list[str]:
+    """The choices the user actually made. The assistant cannot critique a
+    decision it cannot see, so surface the configuration explicitly."""
+    lines: list[str] = []
+    scaler = eng_state.get("_scaler")
+    imb    = eng_state.get("_handle_imbalance")
+    if scaler is not None:
+        lines.append(f"  Scaler            : {scaler}")
+    if imb is not None:
+        lines.append(f"  Imbalance (SMOTE) : {'on' if imb else 'off'}")
+
+    X_tr, X_te = eng_state.get("_X_train"), eng_state.get("_X_test")
+    try:
+        if X_tr is not None and X_te is not None:
+            n_tr, n_te = len(X_tr), len(X_te)
+            pct = n_te / max(n_tr + n_te, 1)
+            lines.append(f"  Train / test rows : {n_tr:,} / {n_te:,} "
+                         f"({pct:.0%} held out)")
+    except Exception:
+        pass
+
+    meta = (eng_state.get("winning_curves") or {}).get("reproducibility_metadata")
+    if isinstance(meta, dict):
+        for key in ("cv_folds", "n_iter", "random_state", "test_size"):
+            if key in meta:
+                lines.append(f"  {key:<18}: {meta[key]}")
+    return lines
+
+
+def _data_health_lines(eng_state: dict) -> list[str]:
+    """Dataset problems that no amount of hyperparameter tuning will fix."""
+    df       = eng_state.get("_df")
+    features = eng_state.get("_features_x")
+    if df is None or not features:
+        return []
+
+    lines: list[str] = []
+    try:
+        feats = [f for f in features if f in df.columns]
+        sub   = df[feats]
+
+        miss = sub.isna().mean()
+        bad_miss = miss[miss > 0.05].sort_values(ascending=False)
+        if len(bad_miss):
+            top = ", ".join(f"{c} ({v:.0%})" for c, v in bad_miss.head(5).items())
+            lines.append(f"  Features >5% missing : {len(bad_miss)} — {top}")
+        elif miss.sum() > 0:
+            lines.append("  Missing values       : present but all under 5%")
+        else:
+            lines.append("  Missing values       : none")
+
+        nunique = sub.nunique(dropna=False)
+        const = list(nunique[nunique <= 1].index)
+        if const:
+            lines.append(f"  Constant features    : {len(const)} — {', '.join(const[:5])}"
+                         " (carry zero information)")
+
+        num = sub.select_dtypes(include="number")
+        if num.shape[1] >= 2:
+            corr = num.corr(numeric_only=True).abs()
+            pairs = []
+            cols = list(corr.columns)
+            for i, a in enumerate(cols):
+                for b in cols[i + 1:]:
+                    v = corr.loc[a, b]
+                    if v > 0.95:
+                        pairs.append(f"{a}~{b} ({v:.2f})")
+            if pairs:
+                lines.append(f"  Near-duplicate pairs : {len(pairs)} at |r|>0.95 — "
+                             f"{', '.join(pairs[:4])}")
+
+        lines.append(f"  Feature types        : {num.shape[1]} numeric, "
+                     f"{sub.shape[1] - num.shape[1]} non-numeric")
+    except Exception:
+        pass
+    return lines
+
+
+def _teaching_signals(eng_state: dict, engine: str) -> list[str]:
+    """Derived observations worth teaching from.
+
+    These are computed here rather than left for the model to notice, because
+    the interesting ones are comparisons (fold spread against model spread, a
+    class's support against its F1) that are easy to state precisely in Python
+    and easy to overlook in a table.
+    """
+    sig: list[str] = []
+
+    # ── Is the leaderboard ordering meaningful? ───────────────────────────
+    # The decisive comparison is model spread against fold-to-fold noise. Stated
+    # separately these are two forgettable numbers; stated together they answer
+    # "is my winner actually the best model?" — usually the user's real question.
+    spread = None
+    res = eng_state.get("results_df")
+    try:
+        if res is not None and not res.empty:
+            test_col = next((c for c in res.columns if "Optimized Test" in c), None)
+            if test_col and len(res) >= 2:
+                vals = pd.to_numeric(res[test_col], errors="coerce").dropna()
+                if len(vals) >= 2:
+                    spread = float(vals.max() - vals.min())
+    except Exception:
+        pass
+
+    noise = None
+    try:
+        folds = eng_state.get("fold_scores")
+        if isinstance(folds, dict) and folds:
+            stds = [float(np.std(list(s))) for s in folds.values()
+                    if hasattr(s, "__len__") and len(s) > 1]
+            if stds:
+                noise = float(np.median(stds))
+    except Exception:
+        pass
+
+    if spread is not None and noise is not None:
+        if spread < noise:
+            sig.append(
+                f"Model spread on the test set is {spread:.4f}, SMALLER than the "
+                f"median fold-to-fold standard deviation of {noise:.4f}. The "
+                "leaderboard ordering is therefore not statistically meaningful "
+                "— these models are tied, and picking the top row over the "
+                "second is picking noise.")
+        else:
+            sig.append(
+                f"Model spread on the test set is {spread:.4f} against "
+                f"{noise:.4f} fold-to-fold noise, so the top models are "
+                "plausibly genuinely separated.")
+    elif spread is not None:
+        sig.append(f"Top-to-bottom model spread on the test set is {spread:.4f}.")
+    elif noise is not None:
+        sig.append(
+            f"Median fold-to-fold standard deviation is {noise:.4f}; score "
+            "differences smaller than this are noise, not ranking.")
+
+    # ── Generalisation gap: CV estimate versus held-out reality ───────────
+    try:
+        if res is not None and not res.empty:
+            cv_col = next((c for c in res.columns
+                           if "CV" in c and "Selection" not in c), None)
+            test_col = next((c for c in res.columns if "Optimized Test" in c), None)
+            if cv_col and test_col:
+                cv_mean = pd.to_numeric(
+                    res[cv_col].astype(str).str.split("±").str[0].str.strip(),
+                    errors="coerce")
+                te = pd.to_numeric(res[test_col], errors="coerce")
+                gap = (cv_mean - te).dropna()
+                if len(gap):
+                    m = float(gap.mean())
+                    if m > 0.05:
+                        sig.append(
+                            f"Cross-validation scores average {m:.4f} HIGHER than "
+                            "held-out test scores — the usual sign that tuning has "
+                            "started fitting the validation folds.")
+                    elif m < -0.05:
+                        sig.append(
+                            f"Held-out test scores average {abs(m):.4f} HIGHER than "
+                            "cross-validation scores. On a small test set this is "
+                            "usually luck of the split rather than genuine skill.")
+    except Exception:
+        pass
+
+    # ── Did optimisation actually earn its cost? ──────────────────────────
+    imp = eng_state.get("imp")
+    if imp not in (None, "—"):
+        sig.append(f"Bayesian optimisation changed the winning score by {imp}.")
+
+    # ── Class imbalance and unreliable per-class metrics ──────────────────
+    rep = eng_state.get("class_report")
+    try:
+        if isinstance(rep, dict):
+            supports = {
+                k: v.get("support") for k, v in rep.items()
+                if isinstance(v, dict) and v.get("support") not in (None, "")
+            }
+            supports = {k: int(v) for k, v in supports.items()
+                        if str(k).lower() not in ("accuracy", "macro avg",
+                                                  "weighted avg", "samples avg")}
+            if supports:
+                lo_k = min(supports, key=supports.get)
+                hi_k = max(supports, key=supports.get)
+                lo, hi = supports[lo_k], supports[hi_k]
+                if lo > 0:
+                    ratio = hi / lo
+                    if ratio >= 3:
+                        sig.append(
+                            f"Class imbalance {ratio:.1f}:1 ('{hi_k}' n={hi} vs "
+                            f"'{lo_k}' n={lo}) — accuracy is misleading here.")
+                thin = {k: v for k, v in supports.items() if v < 30}
+                if thin:
+                    listed = ", ".join(f"'{k}' n={v}" for k, v in thin.items())
+                    sig.append(
+                        f"Thin test support: {listed}. Per-class precision/recall "
+                        "for these move by large steps with a single sample.")
+    except Exception:
+        pass
+
+    # ── Would more data help? ─────────────────────────────────────────────
+    try:
+        lc = eng_state.get("learning_curve")
+        if isinstance(lc, dict):
+            val = lc.get("val_scores") or lc.get("test_scores")
+            if val is not None and len(val) >= 2:
+                arr = np.asarray(val, dtype=float)
+                curve = arr.mean(axis=1) if arr.ndim == 2 else arr
+                if len(curve) >= 3:
+                    tail = float(curve[-1] - curve[-2])
+                    sig.append(
+                        "Learning curve is still rising at the last step "
+                        f"(+{tail:.4f}); more data would likely help."
+                        if tail > 0.005 else
+                        "Learning curve has flattened; more of the same data is "
+                        "unlikely to help — better features would.")
+    except Exception:
+        pass
+
+    # ── Did the optimiser converge? ───────────────────────────────────────
+    try:
+        bo = (eng_state.get("winning_curves") or {}).get("bo_history")
+        if bo is not None and len(bo) >= 4:
+            arr = np.asarray(list(bo), dtype=float)
+            best_so_far = np.maximum.accumulate(arr)
+            last_q = max(1, len(best_so_far) // 4)
+            if float(best_so_far[-1] - best_so_far[-last_q]) <= 1e-6:
+                sig.append(
+                    "Bayesian optimisation plateaued well before its budget ran "
+                    "out; extra iterations would cost time for nothing.")
+            else:
+                sig.append(
+                    "Bayesian optimisation was still improving when the budget "
+                    "ran out; more iterations may still pay.")
+    except Exception:
+        pass
+
+    # ── Configuration choices worth questioning ───────────────────────────
+    try:
+        imb_on = eng_state.get("_handle_imbalance")
+        if imb_on and (eng_state.get("task_type") or "") == "regression":
+            sig.append("SMOTE is enabled on a regression task, where it does "
+                       "not apply.")
+    except Exception:
+        pass
+
+    return sig
+
+
 def _build_experiment_context(eng_state: dict, engine: str) -> str:
     """Build a structured experiment context string from session state for the system prompt."""
     import io
@@ -848,6 +1191,27 @@ def _build_experiment_context(eng_state: dict, engine: str) -> str:
         if track:
             lines.append(f"NLP track        : {track}")
 
+    # ── Pipeline configuration: the user's decisions, open to critique ────
+    cfg = _pipeline_config_lines(eng_state)
+    if cfg:
+        lines.append("\n--- Pipeline Configuration (chosen by the user) ---")
+        lines.extend(cfg)
+
+    # ── Data health: problems tuning cannot fix ───────────────────────────
+    health = _data_health_lines(eng_state)
+    if health:
+        lines.append("\n--- Dataset Health ---")
+        lines.extend(health)
+
+    # ── Precomputed observations for the assistant to teach from ──────────
+    signals = _teaching_signals(eng_state, engine)
+    if signals:
+        lines.append(
+            "\n--- Diagnostic Signals (computed from this run; use these as the "
+            "basis for what you teach, and quote the numbers) ---")
+        for s in signals:
+            lines.append(f"  • {s}")
+
     return "\n".join(lines)
 
 
@@ -907,20 +1271,8 @@ def render_ai_chat(
         else "No experiment has been run yet."
     )
     system_prompt = (
-        "You are an expert ML research assistant embedded in MLatelier, "
-        "a no-code machine learning prototyping platform for researchers.\n"
-        "Your job: help users understand their results and tell them the single "
-        "best next action to take — always as a specific step inside MLatelier.\n\n"
-        "Rules:\n"
-        "- Every suggestion MUST name the exact tab, expander, toggle, slider, or "
-        "button the user should click. No abstract advice.\n"
-        "- Reference the actual numbers from the experiment context.\n"
-        "- Prioritise the highest-impact action first. Don't list 10 things; pick 3.\n"
-        "- Use markdown: **bold** key numbers, bullet lists, `code` for model names.\n"
-        "- When you don't have experiment results yet, still give app-specific "
-        "guidance based on the user's question.\n\n"
-        f"{_MLatelier_APP_GUIDE}\n\n"
-        f"{exp_context}"
+        _MLATELIER_TEACHER_PROMPT
+        + f"\n\n{_MLatelier_APP_GUIDE}\n\n{exp_context}"
     )
 
     # ── Detect result change and auto-generate proactive insight ──────────────
@@ -934,13 +1286,19 @@ def render_ai_chat(
             try:
                 client = genai.Client(api_key=api_key)
                 init_q = (
-                    "I just finished a machine learning experiment in MLatelier. "
-                    "Please give me:\n"
-                    "1. A 2-sentence summary of the key results.\n"
-                    "2. The single most important observation from the numbers.\n"
-                    "3. Exactly three next steps I should take — each must name "
-                    "the specific MLatelier tab, expander, toggle, or slider to use. "
-                    "Order them by expected impact, highest first."
+                    "I just finished this experiment. Walk me through it the way "
+                    "a supervisor would.\n\n"
+                    "Start with two sentences on what the results actually say — "
+                    "plainly, no jargon.\n\n"
+                    "Then take the two or three things that most deserve my "
+                    "attention, drawing on the Diagnostic Signals. For each one, "
+                    "tell me what the numbers show, why it is happening, why it "
+                    "matters for any conclusion I might draw, and what to change "
+                    "in MLatelier — naming the tab or control and the number that "
+                    "should move if it worked. Most important first.\n\n"
+                    "If something looks wrong or too good to be true, lead with "
+                    "that. If the experiment is sound, say so and tell me what "
+                    "makes it sound. Do not pad the answer to fill space."
                 )
                 _reply = _gemini_call(client, init_q, system_prompt, model)
                 st.session_state.ai_messages.append(

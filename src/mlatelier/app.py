@@ -358,10 +358,14 @@ def _render_results(r: dict, api_key: str):
         model_bytes=r.get("exported_model_bytes"),
         model_filename=r.get("exported_model_filename") or "MLatelier_model",
     )
-    _all_paths = (r.get("winning_curves") or {}).get("all_exported_paths", {})
-    if len(_all_paths) > 1:
+    _curves    = r.get("winning_curves") or {}
+    _all_paths = _curves.get("all_exported_paths", {})
+    _onnx_paths = _curves.get("all_onnx_paths", {})
+    # Show the panel for a multi-model run, or whenever an ONNX export exists
+    # (a single-model run still benefits from the .onnx download).
+    if len(_all_paths) > 1 or _onnx_paths:
         with st.expander("Download All Models", expanded=False):
-            render_all_models_download(_all_paths)
+            render_all_models_download(_all_paths, _onnx_paths)
     with st.expander("Export LaTeX Table", expanded=False):
         render_latex_export(r.get("results_df"))
 
@@ -1064,6 +1068,7 @@ with tab_vision:
         vis_export     = True
         vis_seed       = 42
         vis_full_opt   = True
+        vis_ckpt       = True
 
         if vis_data_ok and vis_models:
             st.markdown("#### Training")
@@ -1096,6 +1101,15 @@ with tab_vision:
                     "Random seed", 0, 9999, 42, key="vis_seed")
                 vis_export = st.toggle(
                     "Export trained model (.pt)", value=True, key="vis_exp")
+                vis_ckpt = st.toggle(
+                    "Checkpoint each epoch (resume if interrupted)",
+                    value=True, key="vis_ckpt",
+                    help="Saves model, optimiser and scheduler state after "
+                         "every epoch to ~/MLatelier/checkpoints. If training "
+                         "is interrupted, re-running the same configuration "
+                         "picks up from the last completed epoch instead of "
+                         "starting over. Checkpoints are deleted automatically "
+                         "when training finishes.")
 
         if vis_data_ok and vis_models:
             vis_run_btn = st.button(
@@ -1212,6 +1226,10 @@ with tab_vision:
                     progress_bar.progress(0.0)
                     export_dir = os.path.join(
                         os.path.expanduser("~"), "MLatelier", "models")
+                    _vis_ckpt_dir = (
+                        os.path.join(os.path.expanduser("~"),
+                                     "MLatelier", "checkpoints")
+                        if vis_ckpt else None)
                     (
                         results_list, best_f1, avg_base, imp, p_val,
                         params, report, classes, winning_curves, exported_path,
@@ -1234,6 +1252,7 @@ with tab_vision:
                         random_seed=int(vis_seed),
                         epoch_callback=_on_vis_epoch,
                         model_callback=_on_vis_model,
+                        checkpoint_dir=_vis_ckpt_dir,
                     )
                 else:
                     status_text.info("Baselines complete.")
@@ -2170,6 +2189,10 @@ with tab_nlp:
                 _dev_str = _nlp_dev.get("type", "cpu")
                 _nlp_export_dir = os.path.join(
                     os.path.expanduser("~"), "MLatelier", "models")
+                # Fine-tuning is the longest operation in the framework, so it
+                # always checkpoints; there is no upside to losing an hour.
+                _nlp_ckpt_dir = os.path.join(
+                    os.path.expanduser("~"), "MLatelier", "checkpoints")
 
                 nlp_fold_scores: dict = {}
                 nlp_timing: dict = {}
@@ -2200,6 +2223,7 @@ with tab_nlp:
                         export_dir=_nlp_export_dir if nlp_export else None,
                         progress_bar=_nlp_prog,
                         status_text=_nlp_status,
+                        checkpoint_dir=_nlp_ckpt_dir,
                     )
                     nlp_timing = nlp_winner_curves.get("timing_data", {})
 

@@ -1,6 +1,24 @@
 # MLatelier — Zero-Code ML Prototyping Dashboard
 
+[![Test, Build & Publish](https://github.com/abkafi1234/MLatelier/actions/workflows/publish.yml/badge.svg)](https://github.com/abkafi1234/MLatelier/actions/workflows/publish.yml)
+[![PyPI](https://img.shields.io/pypi/v/mlatelier.svg)](https://pypi.org/project/mlatelier/)
+[![Python](https://img.shields.io/pypi/pyversions/mlatelier.svg)](https://pypi.org/project/mlatelier/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 MLatelier is a Streamlit application that lets researchers and domain experts run complete machine-learning experiments — tabular, vision, and NLP — without writing a single line of model-training code. Upload data, pick models, click **Run**, and get a publication-ready diagnostics panel, optimised model export, LIME/SHAP explanations, and an optional Gemini AI assistant.
+
+## Documentation
+
+| Guide | |
+|---|---|
+| [Installation](docs/installation.md) | Install, extras, GPU setup, troubleshooting |
+| [Quickstart](docs/quickstart.md) | Your first experiment in five minutes |
+| [Tabular ML](docs/tutorial-tabular.md) | Classification, regression, multi-label, XAI, ablation |
+| [NLP](docs/tutorial-nlp.md) | The three text tracks and when to use each |
+| [Vision](docs/tutorial-vision.md) | Transfer learning and Grad-CAM |
+| [API Reference](docs/api-reference.md) | Every public function |
+| [Examples](docs/examples/) | Runnable scripts using the engines as a library |
+| [Contributing](CONTRIBUTING.md) | Dev setup, tests, conventions |
 
 ---
 
@@ -28,7 +46,16 @@ MLatelier is a Streamlit application that lets researchers and domain experts ru
 pip install mlatelier
 ```
 
-Everything is included in a single install — no optional extras needed.
+Everything is included in that single install — every feature in the dashboard
+works without a second `pip` command. MLatelier is driven from a browser by
+people who do not write code, so a button that answers "install another package
+first" is a broken button.
+
+Contributors additionally want the test and build tooling:
+
+```bash
+pip install "mlatelier[dev]"    # pytest, pytest-cov, build, onnxruntime
+```
 
 > **GPU/CUDA note:** For a CUDA-enabled PyTorch build, install the matching torch wheels from [pytorch.org](https://pytorch.org) *before* running `pip install mlatelier`.
 
@@ -55,7 +82,7 @@ The dashboard opens automatically in your browser at `http://localhost:8501`.
 | Tab | Engine | Key capabilities |
 |---|---|---|
 | **Tabular ML** | scikit-learn, XGBoost, LightGBM, CatBoost | Classification, regression, multi-label; Bayesian BO; SHAP/LIME/PDP; EDA |
-| **Vision DL** | PyTorch, torchvision | Transfer learning on 9 architectures; GradCAM; live epoch progress |
+| **Vision DL** | PyTorch, torchvision | Transfer learning on 12 architectures; GradCAM (9 conv backbones); live epoch progress |
 | **Ablation Study** | scikit-learn | Per-component sensitivity (scaler, SMOTE, split, folds) |
 | **Predict** | joblib / PyTorch | Batch tabular & vision inference; confidence histograms |
 | **NLP** | TF-IDF / Sentence Transformers / HuggingFace | ML + DL + fine-tune tracks; BayesSearchCV; LIME text; word cloud |
@@ -82,7 +109,7 @@ The dashboard opens automatically in your browser at `http://localhost:8501`.
 - **Imbalance handling** — SMOTE or random oversampling (skipped for regression and multi-label)
 - **Feature scaling** — auto-select, RobustScaler, StandardScaler, or MinMaxScaler
 - **Live leaderboard** — updates after each model's cross-validation completes
-- **Bayesian optimisation** — `BayesSearchCV` from scikit-optimize; winner selected by holdout test score
+- **Bayesian optimisation** — `BayesSearchCV` from scikit-optimize; winner selected by inner CV score, so holdout performance (reported for every model) never influences the choice
 - **EDA panel** — summary stats, histograms, box plots, correlation heatmap, missing-value heatmap, data quality report
 - **All models exported** — download `.joblib` + JSON metadata sidecar for any run model, not just the winner
 
@@ -98,11 +125,12 @@ The dashboard opens automatically in your browser at `http://localhost:8501`.
 
 **Highlights**
 
-- **Architectures** — ResNet18/50, EfficientNet-B0/B3, MobileNetV3-S/L, DenseNet121, ViT-B/16, Swin-T
+- **Architectures (12)** — `ResNet18`, `ResNet50`, `VGG16`, `EfficientNet_B0`, `EfficientNet_V2_S`, `MobileNet_v3`, `DenseNet121`, `ConvNeXt_T`, `ConvNeXt_S`, `ViT_B_16`, `Swin_T`, `Swin_S`
+- **Data split** — 60/20/20 train/validation/test, stratified by class
 - **Fine-tuning strategy** — frozen backbone (fast prototyping) or full fine-tune
 - **Live training curves** — epoch-by-epoch training and validation loss/accuracy
 - **Post-run diagnostics** — confusion matrix, class distribution chart, sample image grid
-- **GradCAM** — gradient-weighted class activation maps for incorrect predictions
+- **GradCAM** — gradient-weighted class activation maps for incorrect predictions, on the 9 convolutional backbones (not ViT/Swin)
 - **Device-agnostic** — routes to CUDA GPU when available, falls back to CPU
 
 ---
@@ -208,7 +236,9 @@ Random Forest, XGBoost, Gradient Boosting, Extra Trees, Hist Gradient Boosting, 
 Random Forest, XGBoost, Gradient Boosting, Extra Trees, Hist Gradient Boosting, SVR, Linear Regression, Ridge, MLP, Decision Tree, KNN, AdaBoost, SGD, Linear SVR, Passive Aggressive, LightGBM, CatBoost
 
 ### Vision Architectures
-ResNet18, ResNet50, EfficientNet-B0, EfficientNet-B3, MobileNetV3-Small, MobileNetV3-Large, DenseNet121, ViT-B/16, Swin-T
+`ResNet18`, `ResNet50`, `VGG16`, `EfficientNet_B0`, `EfficientNet_V2_S`, `MobileNet_v3`, `DenseNet121`, `ConvNeXt_T`, `ConvNeXt_S`, `ViT_B_16`, `Swin_T`, `Swin_S`
+
+These are the exact registry keys — an unrecognised name raises `ValueError`. Grad-CAM is available for the nine convolutional architectures; `ViT_B_16`, `Swin_T`, and `Swin_S` have no final convolutional feature map to attribute over.
 
 ### NLP Classifiers (ML and DL tracks)
 Logistic Regression, Linear SVC, SGD Classifier, Multinomial NB, Complement NB, Random Forest, XGBoost
@@ -248,25 +278,97 @@ Shown after every completed run:
 
 ## Export and Reproducibility
 
-- Per-model `.joblib` download buttons for every trained tabular model
-- JSON metadata sidecar alongside each export (feature list, hyperparameters, metric)
-- Leaderboard CSV download
-- Full self-contained HTML experiment report
-- LaTeX `booktabs` table for direct inclusion in papers
-- Experiment archive saved under `~/MLatelier/experiments/`
+Two locations, and it is worth knowing which is which:
+
+| Written to | What lands there |
+|---|---|
+| `~/MLatelier/experiments/EXP_<timestamp>/` | Self-contained HTML report and generated curve images, archived per run |
+| `~/MLatelier/models/` | A `.joblib` per trained model plus a JSON metadata sidecar (feature list, hyperparameters, task type, scores), and a `.onnx` file for every convertible model |
+
+Offered as download buttons in the UI, not written to disk: the leaderboard CSV
+and the LaTeX `booktabs` table.
+
+### Checkpointing and resume
+
+Vision transfer learning and HuggingFace fine-tuning are the only operations
+that run for tens of minutes, and they are the ones worth protecting. After
+every epoch MLatelier writes model, optimiser, and scheduler state to
+`~/MLatelier/checkpoints/`. If training is interrupted — closed tab, OOM, power
+cut — re-running the **same configuration** picks up from the last completed
+epoch instead of starting over. Checkpoints are deleted automatically once
+training finishes.
+
+- **Vision DL** — toggle *Checkpoint each epoch* in the training panel (on by default)
+- **NLP HuggingFace track** — always on; it is the longest operation in the framework
+
+A checkpoint records a fingerprint of the run configuration. Change the learning
+rate, architecture, epoch count, or seed and it will **not** resume — you get a
+clean run rather than a silent continuation of a different experiment. Loss and
+validation-score history carries across the resume, so the training curves are
+continuous.
+
+What is *not* resumable: progress through Bayesian-optimisation trials. Each
+trial is short; the long full-training runs after the search are the ones that
+checkpoint.
+
+### ONNX export
+
+Every convertible model gets an `.onnx` file alongside its `.joblib`, downloadable
+from the **Download All Models → Download as ONNX** panel. The whole inference
+pipeline — imputation, scaling, encoding, the estimator — is baked into one
+graph, so you do not reimplement preprocessing on the target platform. The
+training-only oversampling step is excluded.
+
+Converters for XGBoost and LightGBM register automatically, and multi-label
+(`MultiOutputClassifier`) models convert too. **CatBoost has no converter** and
+remains `.joblib`-only; the UI names which models were skipped. Classifier
+graphs emit a probability tensor rather than a ZipMap, so non-Python runtimes
+read them directly.
+
+The graph takes **one named input per feature column**, mirroring the
+`ColumnTransformer` the pipeline is built around:
+
+```python
+import onnxruntime as ort, numpy as np
+
+sess = ort.InferenceSession("MLatelier_Random_Forest.onnx")
+feed = {i.name: X[i.name].to_numpy().astype(np.float32).reshape(-1, 1)
+        for i in sess.get_inputs()}
+label, proba = sess.run(None, feed)
+```
+
+> **The models directory is flat and filenames are keyed by model name**, so a
+> later run overwrites an earlier run's export of the same model. Copy out
+> anything you need to keep before re-running.
+
+Every model that was trained is exported, not only the winner.
 
 ---
 
 ## Project Structure
 
 ```text
-Proto-ML/
-├── pyproject.toml               # pip packaging config and entry point
+MLatelier/
+├── pyproject.toml               # pip packaging config, extras, entry point
 ├── requirements.txt             # plain dependency list
 ├── README.md
+├── LICENSE                      # MIT
+├── CONTRIBUTING.md              # dev setup, conventions, PR process
+├── CITATION.cff                 # "Cite this repository" metadata
+├── .gitignore
 │
-├── mlatelier/                   # installed Python package
-│   ├── __init__.py              # exposes __version__ = "1.0.0"
+├── docs/                        # documentation
+│   ├── index.md                 # documentation home
+│   ├── installation.md          # install, extras, GPU, troubleshooting
+│   ├── quickstart.md            # first experiment in five minutes
+│   ├── tutorial-tabular.md      # tabular tasks, XAI, ablation
+│   ├── tutorial-nlp.md          # the three NLP tracks
+│   ├── tutorial-vision.md       # transfer learning and Grad-CAM
+│   ├── api-reference.md         # every public function
+│   └── examples/                # runnable library-usage scripts
+│
+├── src/mlatelier/               # installed Python package
+│   ├── __init__.py              # exposes __version__ = "1.1.0"
 │   ├── __main__.py              # CLI entry point — runs `streamlit run app.py`
 │   ├── app.py                   # Streamlit UI: 6-tab layout, session state, result rendering
 │   ├── tabular_engine.py        # Baseline CV, Bayesian BO, SHAP/LIME/PDP, multi-label
@@ -278,18 +380,25 @@ Proto-ML/
 │   ├── tracker.py               # Experiment saving and HTML report generation
 │   └── utils.py                 # Page styling and session-state helpers
 │
-├── tests/
-│   ├── test_tabular_engine.py   # 40+ tests: baseline, BO, multi-label, PDP, SHAP, LIME
-│   ├── test_nlp_engine.py       # 136 tests: every model, every config flag, DL track, LIME
-│   ├── test_nlp_enhancements.py # 43 tests: rich preprocessing, HF fine-tune, NLP visualisations
-│   ├── test_reporting.py        # 70+ tests: every render function including NLP renderers
-│   ├── test_inference_engine.py # 12 tests: tabular and vision inference
-│   ├── test_vision_analysis.py  # 14 tests: dataset summary, device detection, model loading
-│   └── test_file_reading.py     # 20+ tests: CSV/Excel reading, sheet selection
+├── tests/                       # 390 tests total
+│   ├── conftest.py              # shared Streamlit stub (installed before any test module)
+│   ├── test_nlp_engine.py       # 136: every model, every config flag, DL track, LIME
+│   ├── test_reporting.py        #  68: every render function including NLP renderers
+│   ├── test_nlp_enhancements.py #  44: rich preprocessing, HF fine-tune, NLP visualisations
+│   ├── test_tabular_engine.py   #  38: baseline, BO, multi-label, PDP, SHAP, LIME
+│   ├── test_ai_context.py       #  27: AI tutor diagnostic signals and dataset health
+│   ├── test_file_reading.py     #  20: CSV/Excel reading, sheet selection
+│   ├── test_checkpoint.py       #  16: checkpoint save/load/fingerprint semantics
+│   ├── test_vision_analysis.py  #  15: dataset summary, device detection, model loading
+│   ├── test_inference_engine.py #  12: tabular and vision inference
+│   ├── test_onnx_export.py      #  10: ONNX round-trip and converter registration
+│   └── test_checkpoint_resume.py#   4: crash mid-training, resume from last epoch
 │
 └── .github/
+    ├── ISSUE_TEMPLATE/          # bug report and feature request forms
+    ├── PULL_REQUEST_TEMPLATE.md
     └── workflows/
-        └── publish.yml          # CI: test → build → publish to PyPI on version tag
+        └── publish.yml          # CI: test (+coverage) → build → publish on version tag
 ```
 
 ---
@@ -307,17 +416,47 @@ python -m pytest tests/ -v
 python -m pytest tests/ -v --ignore=tests/test_vision_analysis.py -k "not DlTrack"
 ```
 
-Test coverage at a glance:
+**390 tests** in total. CI runs the full suite on Python 3.9, 3.11, 3.12, 3.13,
+and 3.14, and reports coverage in the workflow summary. Measured on Python
+3.14: **390 passed, 4 skipped, 0 failed, 52% line coverage**.
+
+Coverage by module — the Streamlit UI layer (`app.py`) is driven through the
+browser and is not unit-tested, which is most of the uncovered total:
+
+| Module | Coverage |
+|---|---|
+| `file_utils.py` | 93% |
+| `nlp_engine.py` | 82% |
+| `checkpoint.py` | 78% |
+| `reporting.py` | 76% |
+| `inference_engine.py` | 72% |
+| `tabular_engine.py` | 72% |
+| `vision_engine.py` | 37% |
+| `app.py`, `tracker.py`, `utils.py` | 0% |
+
+Excluding `app.py`, engine coverage is 68%.
 
 | File | Tests | Notes |
 |---|---|---|
-| `test_nlp_engine.py` | 136 (125 pass, 11 skip) | LIME tests skip when `lime` not installed |
-| `test_nlp_enhancements.py` | 43 | Rich preprocessing, HF fine-tune (mocked), NLP visualisations |
-| `test_reporting.py` | 70+ | All render functions including NLP renderers |
-| `test_tabular_engine.py` | 40+ | Baseline, BO, multi-label, PDP, SHAP, LIME |
+| `test_nlp_engine.py` | 136 | Every model, every config flag, DL track, LIME. LIME tests skip when `lime` is not installed |
+| `test_reporting.py` | 68 | All render functions including NLP renderers |
+| `test_nlp_enhancements.py` | 44 | Rich preprocessing, HF fine-tune (mocked), NLP visualisations |
+| `test_tabular_engine.py` | 38 | Baseline, BO, multi-label, PDP, SHAP, LIME |
+| `test_ai_context.py` | 27 | AI tutor diagnostic signals, dataset health, degenerate state |
+| `test_file_reading.py` | 20 | CSV/Excel formats, sheet selection |
+| `test_checkpoint.py` | 16 | Save/load, fingerprint mismatch, corrupt files, optimiser state |
+| `test_vision_analysis.py` | 15 | Dataset summary, device detection, model loading |
 | `test_inference_engine.py` | 12 | Tabular and vision inference |
-| `test_vision_analysis.py` | 14 | Dataset summary, device detection |
-| `test_file_reading.py` | 20+ | CSV/Excel formats, sheet selection |
+| `test_onnx_export.py` | 10 | ONNX round-trip, XGBoost/LightGBM converters, graceful fallback |
+| `test_checkpoint_resume.py` | 4 | Crash mid-training, resume from last epoch |
+| **Total** | **390** | |
+
+Run with coverage locally:
+
+```bash
+pip install -e ".[dev]"
+pytest --cov=mlatelier --cov-report=term-missing
+```
 
 ---
 
@@ -329,7 +468,7 @@ The included workflow at [.github/workflows/publish.yml](.github/workflows/publi
 
 | Trigger | What runs |
 |---|---|
-| Push to `main` or any PR | `test` job — runs suite on Python 3.9, 3.11, 3.12 |
+| Push to `main` or any PR | `test` job — runs suite on Python 3.9, 3.11, 3.12, 3.13, 3.14 |
 | Push of a version tag `v*.*.*` | `test` → `build` → `publish` to PyPI |
 
 ### One-time PyPI setup (Trusted Publisher — no token needed)
@@ -337,27 +476,32 @@ The included workflow at [.github/workflows/publish.yml](.github/workflows/publi
 1. Log in to [pypi.org](https://pypi.org) → **Your projects** → select or create `mlatelier`.
 2. Go to **Settings → Publishing → Add a new publisher** → choose **GitHub Actions**.
 3. Fill in:
-   - Owner: `<your-github-username>`
-   - Repository: `<your-repo-name>`
+   - Owner: `abkafi1234`
+   - Repository: `MLatelier`
    - Workflow filename: `publish.yml`
    - Environment name: `pypi`
 4. Save.
 
 ### How to release a new version
 
+Keep the version in step across all three files — `pyproject.toml`,
+`src/mlatelier/__init__.py`, and `CITATION.cff`.
+
 ```bash
-# 1. Bump version in pyproject.toml and mlatelier/__init__.py
+# 1. Bump the version in all three files (example: 1.1.0 -> 1.2.0)
 # 2. Commit and push
-git add pyproject.toml mlatelier/__init__.py
-git commit -m "chore: bump version to v1.1.0"
+git add pyproject.toml src/mlatelier/__init__.py CITATION.cff
+git commit -m "chore: bump version to v1.2.0"
 git push origin main
 
 # 3. Tag and push the tag — this triggers the publish job
-git tag v1.1.0
-git push origin v1.1.0
+git tag v1.2.0
+git push origin v1.2.0
 ```
 
-The workflow will run tests, build `dist/mlatelier-1.1.0-py3-none-any.whl` and the sdist, then upload both to PyPI. The new version is live within seconds.
+The workflow will run tests, build `dist/mlatelier-1.2.0-py3-none-any.whl` and the sdist, then upload both to PyPI. The new version is live within seconds.
+
+> PyPI refuses to overwrite an existing version, so the tag must be a version that has never been published.
 
 > **Alternative: API token** — If you prefer a token over Trusted Publisher, create one at pypi.org → Account settings → API tokens, store it as a GitHub Actions secret named `PYPI_API_TOKEN`, and follow the token-based instructions in the comments inside `publish.yml`.
 

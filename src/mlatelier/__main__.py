@@ -10,7 +10,16 @@ def main():
     app_path = os.path.join(dir_path, "app.py")
 
     print("Starting MLatelier Zero-Code Dashboard on localhost...")
-    sys.exit(subprocess.run(["streamlit", "run", app_path]).returncode)
+    # Invoke Streamlit through the interpreter that is running MLatelier rather
+    # than a bare "streamlit" name. The bare name resolves only when the
+    # environment's Scripts/bin directory happens to be on PATH, so it fails
+    # with FileNotFoundError for anyone who installs into a virtualenv and
+    # launches by path without activating it first.
+    sys.exit(
+        subprocess.run(
+            [sys.executable, "-m", "streamlit", "run", app_path]
+        ).returncode
+    )
 
 
 if __name__ == "__main__":

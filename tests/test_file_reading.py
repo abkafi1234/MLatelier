@@ -178,11 +178,22 @@ def test_read_xlsx_preserves_values(tmp_path):
 # ── _read_tabular: xls ───────────────────────────────────────────────────────
 
 def test_read_xls_from_path(tmp_path):
+    """Read a legacy .xls.
+
+    Building the fixture needs a *writer*, and pandas dropped its xlwt writer —
+    xlwt itself is unmaintained and has no wheel for current Pythons. Reading
+    .xls still works through xlrd, which is a declared dependency; this test
+    skips when no writer is available to produce the input.
+    """
     pytest.importorskip("xlrd")
-    df   = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
-    path = str(tmp_path / "old.xls")
-    df.to_excel(path, index=False, engine="xlwt")
-    out  = _read_tabular(path)
+    df  = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
+    raw = _xls_bytes(df)
+    if raw is None:
+        pytest.skip("xlwt unavailable — cannot author a legacy .xls fixture")
+
+    path = tmp_path / "old.xls"
+    path.write_bytes(raw)
+    out = _read_tabular(str(path))
     assert len(out) == 2
 
 

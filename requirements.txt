@@ -1,5 +1,12 @@
 # MLatelier runtime dependencies
 # Install with: python -m pip install -r requirements.txt
+#
+# This mirrors [project.dependencies] in pyproject.toml — keep the two in step.
+# `pip install mlatelier` reads pyproject.toml, not this file.
+#
+# There are no user-facing optional extras: MLatelier is driven from a browser,
+# so every feature must work on a single install. Contributors additionally want
+#   pip install "mlatelier[dev]"   pytest, coverage, build, onnxruntime
 
 # Web app
 streamlit>=1.33.0
@@ -12,6 +19,11 @@ matplotlib>=3.8.0
 seaborn>=0.13.0
 scipy>=1.12.0
 tabulate>=0.9.0
+pillow>=10.0.0
+
+# Excel readers used by pandas.read_excel (not pulled in by pandas itself)
+openpyxl>=3.1.0
+xlrd>=2.0.1
 
 # Tabular ML core
 scikit-learn>=1.4.0
@@ -40,3 +52,10 @@ wordcloud>=1.9.0
 
 # Gemini AI assistant
 google-genai>=0.4.0
+
+# ONNX export (skl2onnx converts sklearn; onnxmltools adds XGBoost/LightGBM)
+skl2onnx>=1.16.0
+onnxmltools>=1.12.0
+
+# Counterfactual explanations
+dice-ml>=0.11
